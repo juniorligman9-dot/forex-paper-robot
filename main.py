@@ -2,16 +2,16 @@
 Main application for the Forex Paper Trading Robot.
 
 Workflow:
-1. Load all configured Forex pairs
-2. Get simulated market data
-3. Calculate indicators
-4. Generate BUY, SELL, or HOLD signals
-5. Check risk limits
-6. Open paper trades
-7. Monitor Stop Loss and Take Profit
-8. Display account summary
+1. Advance the simulated Forex market once
+2. Get a consistent price snapshot
+3. Check existing trades for Stop Loss / Take Profit
+4. Analyze all configured Forex pairs
+5. Generate BUY, SELL, or HOLD signals
+6. Open paper trades when allowed
+7. Display account summary
 
-This version uses simulated data and does NOT place real trades.
+This version uses simulated market data and
+does NOT place real trades.
 """
 
 import time
@@ -45,9 +45,27 @@ class ForexPaperRobot:
         self.running = False
         self.scan_number = 0
 
+        # Number of simulated price movements
+        # per scan.
+        self.market_movements_per_scan = 3
+
+    def advance_market(self):
+        """
+        Advance the entire simulated market once.
+
+        Returns:
+            dict of current prices
+        """
+
+        return self.data_feed.advance_market(
+            pairs=FOREX_PAIRS,
+            movements=self.market_movements_per_scan,
+        )
+
     def get_current_prices(self):
         """
-        Get the latest simulated price for all Forex pairs.
+        Get a price snapshot without causing
+        additional market movement.
         """
 
         prices = {}
@@ -56,22 +74,26 @@ class ForexPaperRobot:
             try:
                 prices[pair] = (
                     self.data_feed.get_latest_price(
-                        pair
+                        pair,
+                        update=False,
                     )
                 )
 
             except Exception as error:
                 print(
-                    f"[PRICE ERROR] {pair}: "
-                    f"{error}"
+                    f"[PRICE ERROR] "
+                    f"{pair}: {error}"
                 )
 
         return prices
 
     def analyze_pair(self, pair):
         """
-        Get market data and generate a signal
-        for one Forex pair.
+        Analyze one Forex pair using the
+        current market state.
+
+        No additional market movement occurs
+        during analysis.
         """
 
         try:
@@ -79,6 +101,7 @@ class ForexPaperRobot:
                 self.data_feed.get_candles(
                     pair,
                     limit=CANDLE_LIMIT,
+                    update=False,
                 )
             )
 
@@ -116,12 +139,13 @@ class ForexPaperRobot:
         signal = result["signal"]
         price = result["price"]
 
+        # Ignore HOLD signals
         if signal == HOLD:
             return
 
         print(
-            f"\n[SIGNAL] {pair} | "
-            f"{signal}"
+            f"\n[SIGNAL] "
+            f"{pair} | {signal}"
         )
 
         print(
@@ -137,10 +161,11 @@ class ForexPaperRobot:
         )
 
         print(
-            f"Reason: {result['reason']}"
+            f"Reason: "
+            f"{result['reason']}"
         )
 
-        # Attempt to open a paper trade
+        # Try to open a paper trade
         trade_result = (
             self.broker.open_trade(
                 pair=pair,
@@ -240,6 +265,11 @@ class ForexPaperRobot:
             )
 
             print(
+                f"Entry Price: "
+                f"{trade['entry_price']:.5f}"
+            )
+
+            print(
                 f"Exit Price: "
                 f"{trade['exit_price']:.5f}"
             )
@@ -253,6 +283,32 @@ class ForexPaperRobot:
                 f"Reason: "
                 f"{trade['close_reason']}"
             )
+
+    def print_signal_summary(
+        self,
+        buy_count,
+        sell_count,
+        hold_count,
+    ):
+        """
+        Print the signal totals for the scan.
+        """
+
+        print("\n" + "-" * 40)
+        print("SIGNAL SUMMARY")
+        print("-" * 40)
+
+        print(
+            f"BUY signals:  {buy_count}"
+        )
+
+        print(
+            f"SELL signals: {sell_count}"
+        )
+
+        print(
+            f"HOLD signals: {hold_count}"
+        )
 
     def print_summary(
         self,
@@ -339,7 +395,10 @@ class ForexPaperRobot:
 
     def run_scan(self):
         """
-        Run one complete market scan.
+        Run one complete Forex market scan.
+
+        The market is advanced only once at
+        the beginning of the scan.
         """
 
         self.scan_number += 1
@@ -363,21 +422,40 @@ class ForexPaperRobot:
         )
         print("=" * 60)
 
-        # Get current prices
+        # ----------------------------------
+        # STEP 1
+        # Advance the simulated market once
+        # ----------------------------------
+
+        self.advance_market()
+
+        # ----------------------------------
+        # STEP 2
+        # Create a stable price snapshot
+        # ----------------------------------
+
         prices = (
             self.get_current_prices()
         )
 
-        # Check existing trades first
+        # ----------------------------------
+        # STEP 3
+        # Check existing trades
+        # ----------------------------------
+
         self.check_open_trades(
             prices
         )
+
+        # ----------------------------------
+        # STEP 4
+        # Analyze all Forex pairs
+        # ----------------------------------
 
         buy_count = 0
         sell_count = 0
         hold_count = 0
 
-        # Analyze every configured pair
         for pair in FOREX_PAIRS:
 
             result = (
@@ -397,25 +475,32 @@ class ForexPaperRobot:
             elif signal == SELL:
                 sell_count += 1
 
-            else:
+            elif signal == HOLD:
                 hold_count += 1
 
-            # Process BUY or SELL signals
-            self.process_signal(
-                pair,
-                result,
-            )
+            # Process only BUY and SELL
+            if signal in [BUY, SELL]:
 
-        # Get fresh prices for summary
+                self.process_signal(
+                    pair,
+                    result,
+                )
+
+        # ----------------------------------
+        # STEP 5
+        # Get final stable price snapshot
+        # ----------------------------------
+
         latest_prices = (
             self.get_current_prices()
         )
 
-        print("\nSCAN RESULTS")
-        print("-" * 30)
-        print(f"BUY signals:  {buy_count}")
-        print(f"SELL signals: {sell_count}")
-        print(f"HOLD signals: {hold_count}")
+        # Print results
+        self.print_signal_summary(
+            buy_count,
+            sell_count,
+            hold_count,
+        )
 
         self.print_summary(
             latest_prices
@@ -423,13 +508,13 @@ class ForexPaperRobot:
 
     def start(self):
         """
-        Start the robot's continuous scanning loop.
+        Start the continuous scanning loop.
         """
 
         if not PAPER_TRADING:
             raise RuntimeError(
-                "This robot is configured for "
-                "paper trading only."
+                "This version is configured "
+                "for paper trading only."
             )
 
         self.running = True
@@ -449,6 +534,11 @@ class ForexPaperRobot:
         )
 
         print(
+            f"Market movements per scan: "
+            f"{self.market_movements_per_scan}"
+        )
+
+        print(
             f"Scan interval: "
             f"{SCAN_INTERVAL_SECONDS} seconds"
         )
@@ -463,6 +553,9 @@ class ForexPaperRobot:
             while self.running:
 
                 self.run_scan()
+
+                if not self.running:
+                    break
 
                 print(
                     f"\nWaiting "
@@ -485,7 +578,8 @@ class ForexPaperRobot:
         except Exception as error:
 
             print(
-                f"\n[FATAL ERROR] {error}"
+                f"\n[FATAL ERROR] "
+                f"{error}"
             )
 
             if DEBUG:
@@ -495,7 +589,7 @@ class ForexPaperRobot:
 
     def stop(self):
         """
-        Stop the robot.
+        Stop the robot safely.
         """
 
         self.running = False
